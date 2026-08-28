@@ -30,7 +30,7 @@ jobs:
     # the reviewed `release` environment. Both are registered as trusted
     # publishers on PyPI.
     environment:
-      name: ${{ github.event_name == 'workflow_run' && 'release-nightly' || 'release' }}
+      name: ${{ (github.event_name == 'workflow_run' && 'release-nightly') || 'release' }}
     permissions:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
@@ -53,8 +53,6 @@ jobs:
         python-version: 3.12
 
     # Nightly only: stamp `<next version>.dev<YYYYMMDD>` into the working tree.
-    # PEP 440 sorts a dev release before its own base version, so the base must
-    # be the next version for nightlies to sort after the current release.
     # Never committed, so `main` keeps its stable version.
     - name: Stamp nightly version
       if: github.event_name == 'workflow_run'
@@ -74,11 +72,9 @@ jobs:
                           f'TOKAMAX_VERSION: Final[str] = "{nightly}"', 1)
 
         path.write_text(new)
-        print(f"version  -> {nightly} (was {current})")
+        print(f"Step 'Stamp nightly version': version  -> {nightly} (was {current})")
         EOF
 
-    # Both paths: record the commit the wheel was built from. PyPI rejects
-    # local version identifiers, so this cannot live in the version string.
     - name: Stamp git revision
       env:
         TESTED_SHA: ${{ github.event.workflow_run.head_sha }}  # empty on manual dispatch
@@ -101,8 +97,8 @@ jobs:
             raise SystemExit("TOKAMAX_GIT_REVISION not found.")
 
         path.write_text(new)
-        print(f"revision -> {head}")
-        print(f"tested   -> {tested or '(manual dispatch)'}")
+        print(f"Step 'Stamp git revision': revision -> {head}")
+        print(f"Step 'Stamp git revision': tested   -> {tested or '(manual dispatch)'}")
         EOF
 
     - name: Install dependencies
