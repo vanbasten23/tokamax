@@ -3,6 +3,13 @@ name: Publish to PyPI
 on:
   # Event manually triggered (in the Github UI)
   workflow_dispatch:
+  # Nightly wheels: publish automatically once the nightly tests pass.
+  # `types: [completed]` fires on any finish, so the job `if:` below filters
+  # down to successful runs of the default branch.
+  workflow_run:
+    workflows: ["CI-Nightly"]
+    types: [completed]
+    branches: [main]
 
 
 # This job will publish the package to PyPI. It will use the release
@@ -11,9 +18,19 @@ on:
 # and https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers for more details.
 jobs:
   pypi-publish:
+    # On a manual run `github.event.workflow_run` does not exist, so the
+    # conclusion check alone would evaluate falsy and skip the job.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: release
+    # Nightlies use an environment without approval gates; manual releases keep
+    # the reviewed `release` environment. Both are registered as trusted
+    # publishers on PyPI.
+    environment:
+      name: ${{ github.event_name == 'workflow_run' && 'release-nightly' || 'release' }}
     permissions:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
@@ -24,12 +41,69 @@ jobs:
     - name: Checkout Tokamax
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
+        # Pin to the commit CI-Nightly tested. Without this a workflow_run job
+        # checks out the default branch's current HEAD, which may have moved
+        # since that run started. Empty on manual dispatch, so it falls back.
+        ref: ${{ github.event.workflow_run.head_sha || github.ref }}
         persist-credentials: false
 
     - name: Install Python 3.12
       uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
       with:
         python-version: 3.12
+
+    # Nightly only: stamp `<next version>.dev<YYYYMMDD>` into the working tree.
+    # PEP 440 sorts a dev release before its own base version, so the base must
+    # be the next version for nightlies to sort after the current release.
+    # Never committed, so `main` keeps its stable version.
+    - name: Stamp nightly version
+      if: github.event_name == 'workflow_run'
+      run: |
+        python - <<'EOF'
+        import datetime, pathlib, re
+
+        path = pathlib.Path("tokamax/_src/version.py")
+        src = path.read_text()
+
+        current = re.search(r'TOKAMAX_VERSION: Final\[str\] = "([^"]+)"', src).group(1)
+        major, minor, patch = (int(x) for x in current.split("."))
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
+        nightly = f"{major}.{minor}.{patch + 1}.dev{stamp}"
+
+        new = src.replace(f'TOKAMAX_VERSION: Final[str] = "{current}"',
+                          f'TOKAMAX_VERSION: Final[str] = "{nightly}"', 1)
+
+        path.write_text(new)
+        print(f"version  -> {nightly} (was {current})")
+        EOF
+
+    # Both paths: record the commit the wheel was built from. PyPI rejects
+    # local version identifiers, so this cannot live in the version string.
+    - name: Stamp git revision
+      env:
+        TESTED_SHA: ${{ github.event.workflow_run.head_sha }}  # empty on manual dispatch
+      run: |
+        python - <<'EOF'
+        import os, pathlib, subprocess
+
+        head = subprocess.run(["git", "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+        tested = os.environ.get("TESTED_SHA")
+        if tested and head != tested:
+            raise SystemExit(f"building {head} but CI-Nightly tested {tested}")
+
+        path = pathlib.Path("tokamax/_src/version.py")
+        src = path.read_text()
+        new = src.replace('TOKAMAX_GIT_REVISION: Final[str] = ""',
+                          f'TOKAMAX_GIT_REVISION: Final[str] = "{head}"', 1)
+        if new == src:
+            raise SystemExit("TOKAMAX_GIT_REVISION not found.")
+
+        path.write_text(new)
+        print(f"revision -> {head}")
+        print(f"tested   -> {tested or '(manual dispatch)'}")
+        EOF
 
     - name: Install dependencies
       run: |
