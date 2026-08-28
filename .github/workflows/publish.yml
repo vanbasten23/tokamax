@@ -53,6 +53,8 @@ jobs:
         python-version: 3.12
 
     # Nightly only: stamp `<next version>.dev<YYYYMMDD>` into the working tree.
+    # Base the nightly on the NEXT version: PEP 440 sorts a dev release before
+    # its own base, so 0.0.13.dev* would sort below the published 0.0.13.
     # Never committed, so `main` keeps its stable version.
     - name: Stamp nightly version
       if: github.event_name == 'workflow_run'
