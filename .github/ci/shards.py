@@ -163,8 +163,8 @@ class Spec(_RequiredSpec, total=False):
 # Shard name -> spec, as `SHARDS` and as `resolve_shards` returns it.
 ShardMap = dict[str, Spec]
 
-# One `strategy.matrix.include` entry: a (shard, runner) job. Every value is a
-# string because that is what the workflow interpolates.
+# One `strategy.matrix.include` entry: a (shard, runner, JAX version) job.
+# Every value is a string because that is what the workflow interpolates.
 MatrixEntry = dict[str, str]
 
 # This script describes what tests are in a given shard.
@@ -1123,9 +1123,11 @@ def shard_order(item: tuple[str, Spec]) -> tuple[bool, bool, float, int, str]:
 
 
 def build_matrix(shards: ShardMap) -> list[MatrixEntry]:
-  """Builds `strategy.matrix.include`, one entry per (shard, runner) job.
+  """Builds `strategy.matrix.include`, one entry per job.
 
-  Every shard runs on every runner, so this is the full cross product.
+  Every shard runs on every runner, so that is the full cross product. The
+  shards in `COMPAT_SHARDS` then run once more per version in `older_jaxs()`,
+  on `COMPAT_RUNNER` for backward compatibility check.
 
   The only place a shard's `paths` becomes a command line: the workflow
   interpolates `test_paths` straight into a `run:` block, so `shlex.join`
@@ -1135,15 +1137,17 @@ def build_matrix(shards: ShardMap) -> list[MatrixEntry]:
     shards: Shard name to spec, as `resolve_shards` returns it.
 
   Returns:
-    A job per shard per runner, in `shard_order` within each runner.
+    A job per shard per runner, in `shard_order` within each runner, then the
+    backward compatible jobs.
   """
-  return [
+  entries = [
       {
           'runner': runner,
           'runner_short': short,
           'device': device,
           'shard_name': name,
           'test_paths': shlex.join(spec['paths']),
+          'jax_pin': latest_jax(),
       }
       for runner, (device, short) in RUNNERS.items()
       for name, spec in sorted(shards.items(), key=shard_order)
@@ -1152,6 +1156,24 @@ def build_matrix(shards: ShardMap) -> list[MatrixEntry]:
       # whole repository".
       if spec['paths']
   ]
+
+  device, short = RUNNERS[COMPAT_RUNNER]
+  # `check_consistency` validates the `COMPAT_SHARDS`.
+  compat = [(n, shards[n]) for n in COMPAT_SHARDS if n in shards]
+  entries += [
+      {
+          'runner': COMPAT_RUNNER,
+          'runner_short': f'{short}-jax{version}',
+          'device': device,
+          'shard_name': name,
+          'test_paths': shlex.join(spec['paths']),
+          'jax_pin': version,
+      }
+      for version in older_jaxs()
+      for name, spec in sorted(compat, key=shard_order)
+      if spec['paths']
+  ]
+  return entries
 
 
 def main(argv: Sequence[str] | None = None) -> int:
