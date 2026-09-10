@@ -1076,6 +1076,37 @@ def check_consistency(
           ' does not declare: '
           + ', '.join(unknown)
       )
+
+  # COMPAT_SHARDS should be a subset of SHARDS. Similarly for COMPAT_RUNNER.
+  for name in COMPAT_SHARDS:
+    if name not in SHARDS:
+      errors.append(f'COMPAT_SHARDS {name!r} is not in SHARDS.')
+  if COMPAT_RUNNER not in RUNNERS:
+    errors.append(f'COMPAT_RUNNER {COMPAT_RUNNER!r} is not in RUNNERS.')
+
+  if len(JAX_VERSIONS) < 2:
+    errors.append(
+        f'JAX_VERSIONS is {JAX_VERSIONS}: it needs an older version to check'
+        ' compatibility against.'
+    )
+  if dupes := sorted({v for v in JAX_VERSIONS if JAX_VERSIONS.count(v) > 1}):
+    errors.append(
+        f'Duplicated JAX version found in {JAX_VERSIONS}.'
+    )
+  jax_version_re = re.compile(r'\d+(\.\d+)*')
+  if bad := sorted(v for v in JAX_VERSIONS if not jax_version_re.fullmatch(v)):
+    errors.append('Invalid JAX version found in JAX_VERSIONS: ' + ', '.join(bad))
+    return errors
+
+  try:
+    if (floor := jax_floor()) != oldest_jax():
+      errors.append(
+          f'pyproject.toml declares jax>={floor}, but the oldest version in'
+          f' JAX_VERSIONS is {oldest_jax()}: the support window and the'
+          ' versions CI tests have to be the same'
+      )
+  except ValueError as exc:
+    errors.append(str(exc))
   return errors
 
 
