@@ -132,6 +132,15 @@ THEMES = (
 # Test files intentionally run by no shard.
 EXCLUDED_TESTS = ()
 
+# The JAX versions CI tests. `latest_jax()` is what every ordinary shard job
+# installs; every version in `older_jax()` gets a compat rerun of
+# `COMPAT_SHARDS` on `COMPAT_RUNNER`, so that a downstream still on the older
+# release is not broken by a change that only works on the newer one.
+JAX_VERSIONS = ('0.11.1', '0.11.0')
+
+COMPAT_SHARDS = ('gmm-v2-kernel',)
+COMPAT_RUNNER = 'linux-x86-tpu7x-56-1tpu'
+
 
 class _RequiredSpec(TypedDict):
   """The part of a shard spec every shard has."""
@@ -668,6 +677,29 @@ def jax_floor(pyproject: str = 'pyproject.toml') -> str:
         + ', '.join(sorted(floors))
     )
   return floors.pop()
+
+
+def sorted_jax_versions() -> tuple[str, ...]:
+  """Returns `JAX_VERSIONS` in version order, newest first."""
+  def version_key(version: str) -> tuple[int, ...]:
+    """Returns `'0.9.0.1'` as `(0, 9, 0, 1)`, so that releases order correctly."""
+    return tuple(int(part) for part in version.split('.'))
+  return tuple(sorted(JAX_VERSIONS, key=version_key, reverse=True))
+
+
+def latest_jax() -> str:
+  """Returns the newest version CI tests: what an ordinary shard job installs."""
+  return sorted_jax_versions()[0]
+
+
+def older_jaxs() -> tuple[str, ...]:
+  """Returns every version but the newest: one compat rerun each."""
+  return sorted_jax_versions()[1:]
+
+
+def oldest_jax() -> str:
+  """Returns the oldest version CI tests, which the `pyproject` floor equals."""
+  return sorted_jax_versions()[-1]
 
 
 def _is_test_filename(name: str) -> bool:
