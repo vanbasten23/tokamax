@@ -648,11 +648,6 @@ SHARDS: ShardMap = {
 
 _CATCH_ALL_SHARD = 'catch-all'
 
-# A `jax` or `jaxlib` requirement with a `>=` floor, with or without extras:
-# `jax>=0.11.0`, `jaxlib>=0.11.0`, `jax[tpu]>=0.11.0`, `jax[cuda13]>=0.11.0`.
-# Anchored by `fullmatch`, so `jaxtyping>=0.3` and `cuequivariance-jax>=0.10.0`
-# are not JAX requirements and do not match.
-_JAX_REQUIREMENT = re.compile(r'(jax|jaxlib)(\[[^\]]*\])?>=([0-9][^,;\s]*)')
 
 
 def jax_floor(pyproject: str = 'pyproject.toml') -> str:
@@ -664,10 +659,15 @@ def jax_floor(pyproject: str = 'pyproject.toml') -> str:
   for extra in project.get('optional-dependencies', {}).values():
     requirements.extend(extra)
 
+  # A `jax` or `jaxlib` requirement with a `>=` floor, with or without extras:
+  # `jax>=0.11.0`, `jaxlib>=0.11.0`, `jax[tpu]>=0.11.0`, `jax[cuda13]>=0.11.0`.
+  # Anchored by `fullmatch`, so `jaxtyping>=0.3` and `cuequivariance-jax>=0.10.0`
+  # are not JAX requirements and do not match.
+  _JAX_REQUIREMENT_RE = re.compile(r'(jax|jaxlib)(\[[^\]]*\])?>=([0-9][^,;\s]*)')
   floors = {
       m[3]
       for r in requirements
-      if (m := _JAX_REQUIREMENT.fullmatch(r.strip()))
+      if (m := _JAX_REQUIREMENT_RE.fullmatch(r.strip()))
   }
   if not floors:
     raise ValueError(f'{pyproject} declares no `jax>=` requirement')
@@ -682,7 +682,6 @@ def jax_floor(pyproject: str = 'pyproject.toml') -> str:
 def sorted_jax_versions() -> tuple[str, ...]:
   """Returns `JAX_VERSIONS` in version order, newest first."""
   def version_key(version: str) -> tuple[int, ...]:
-    """Returns `'0.9.0.1'` as `(0, 9, 0, 1)`, so that releases order correctly."""
     return tuple(int(part) for part in version.split('.'))
   return tuple(sorted(JAX_VERSIONS, key=version_key, reverse=True))
 
