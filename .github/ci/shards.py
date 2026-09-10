@@ -47,8 +47,10 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 import fnmatch
 import json
 import os
+import re
 import shlex
 import sys
+import tomllib
 from typing import TypedDict
 
 # Runner label -> (device extra it installs and tests, short name used in the
@@ -636,6 +638,36 @@ SHARDS: ShardMap = {
 # pylint: enable=line-too-long
 
 _CATCH_ALL_SHARD = 'catch-all'
+
+# A `jax` or `jaxlib` requirement with a `>=` floor, with or without extras:
+# `jax>=0.11.0`, `jaxlib>=0.11.0`, `jax[tpu]>=0.11.0`, `jax[cuda13]>=0.11.0`.
+# Anchored by `fullmatch`, so `jaxtyping>=0.3` and `cuequivariance-jax>=0.10.0`
+# are not JAX requirements and do not match.
+_JAX_REQUIREMENT = re.compile(r'(jax|jaxlib)(\[[^\]]*\])?>=([0-9][^,;\s]*)')
+
+
+def jax_floor(pyproject: str = 'pyproject.toml') -> str:
+  """Returns the oldest JAX that `pyproject.toml` claims to support."""
+  with open(pyproject, 'rb') as f:
+    project = tomllib.load(f)['project']
+
+  requirements = list(project.get('dependencies', ()))
+  for extra in project.get('optional-dependencies', {}).values():
+    requirements.extend(extra)
+
+  floors = {
+      m[3]
+      for r in requirements
+      if (m := _JAX_REQUIREMENT.fullmatch(r.strip()))
+  }
+  if not floors:
+    raise ValueError(f'{pyproject} declares no `jax>=` requirement')
+  if len(floors) > 1:
+    raise ValueError(
+        f'{pyproject} declares more than one JAX floor: '
+        + ', '.join(sorted(floors))
+    )
+  return floors.pop()
 
 
 def _is_test_filename(name: str) -> bool:
