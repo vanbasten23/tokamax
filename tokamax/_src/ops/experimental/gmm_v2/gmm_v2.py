@@ -614,6 +614,11 @@ def inner_kernel(
       if should_use_external_scale:
         lhs_scale = tiled_lhs_ref.get_scale().astype(acc_ref.dtype)
         lhs_scale_inv = 1.0 / lhs_scale
+      # An external lhs scale that is constant along k (last dim of 1) can be
+      # applied once after the k loop instead of per k-block.
+      ext_lhs_scale_const_k = (
+          should_use_external_scale and lhs_scale.shape[-1] == 1
+      )
 
       # Without n outer loop, result of quantized matmul becomes available only
       # at the last iteration of the loop. This means [tile_m, tile_n] value
@@ -665,10 +670,9 @@ def inner_kernel(
             block_rhs = block_rhs.astype(lhs_q_dtype)
 
           block_len = end_k - start_k
-          # With an external lhs scale, block_scale is constant over k, so it
-          # is applied once to acc_n after the k loop instead of per block, and
-          # sub-block results accumulate directly into acc_n.
-          block_acc = acc_n if should_use_external_scale else None
+          # With a k-invariant lhs scale, sub-block results accumulate directly
+          # into acc_n and the scale is applied once after the k loop.
+          block_acc = acc_n if ext_lhs_scale_const_k else None
           for sub_k in range(0, block_len, step_k):  # pyrefly: ignore[bad-argument-type]
             sub_end_k = min(block_len, sub_k + step_k)  # pyrefly: ignore[unsupported-operation]
             sub_acc = jnp.matmul(
@@ -693,12 +697,12 @@ def inner_kernel(
             block_acc = sub_acc if block_acc is None else block_acc + sub_acc
 
           assert block_acc is not None
-          if should_use_external_scale:
+          if ext_lhs_scale_const_k:
             acc_n = block_acc
           else:
             block_acc *= block_scale.astype(acc_ref.dtype)
             acc_n += block_acc
-        if should_use_external_scale:
+        if ext_lhs_scale_const_k:
           assert lhs_scale is not None
           acc_n *= lhs_scale
         acc_list.append(acc_n)
