@@ -665,9 +665,10 @@ def inner_kernel(
             block_rhs = block_rhs.astype(lhs_q_dtype)
 
           block_len = end_k - start_k
-          # Initialize to None rather than jnp.zeros to avoid emitting an extra
-          # VPU add instruction on the first sub-block in Pallas/Mosaic lowering.
-          block_acc = None
+          # With an external lhs scale, block_scale is constant over k, so it
+          # is applied once to acc_n after the k loop instead of per block, and
+          # sub-block results accumulate directly into acc_n.
+          block_acc = acc_n if should_use_external_scale else None
           for sub_k in range(0, block_len, step_k):  # pyrefly: ignore[bad-argument-type]
             sub_end_k = min(block_len, sub_k + step_k)  # pyrefly: ignore[unsupported-operation]
             sub_acc = jnp.matmul(
@@ -692,8 +693,14 @@ def inner_kernel(
             block_acc = sub_acc if block_acc is None else block_acc + sub_acc
 
           assert block_acc is not None
-          block_acc *= block_scale.astype(acc_ref.dtype)
-          acc_n += block_acc
+          if should_use_external_scale:
+            acc_n = block_acc
+          else:
+            block_acc *= block_scale.astype(acc_ref.dtype)
+            acc_n += block_acc
+        if should_use_external_scale:
+          assert lhs_scale is not None
+          acc_n *= lhs_scale
         acc_list.append(acc_n)
 
     acc = jnp.concatenate(acc_list, axis=1)
