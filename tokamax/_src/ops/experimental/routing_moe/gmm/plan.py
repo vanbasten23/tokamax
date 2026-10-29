@@ -143,8 +143,14 @@ class ResolvedGmmPlan(RoutingGmmPlan):
     if plan.matmul_dtype is not None:
       matmul_dtype = jnp.dtype(plan.matmul_dtype)
     elif x.quant is None and w.quant is not None:
-      # TODO: Support mixed precision and choose by hardware support.
       matmul_dtype = w.dtype
+      # Narrow floating-point x (e.g. fp4, e5m2) is too lossy. Like gmm_v2,
+      # quantize x to e4m3 for floating-point weights when the TPU has fp8.
+      if (
+          jnp.issubdtype(w.dtype, jnp.floating)
+          and tpu_info.fp8_ops_per_second > 0
+      ):
+        matmul_dtype = jnp.float8_e4m3fn.dtype
     else:
       matmul_dtype = x.dtype
     x_quant_block_size = plan.x_quant_block_size
