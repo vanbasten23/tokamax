@@ -336,6 +336,50 @@ class GmmTest(parameterized.TestCase):
 
     assert_arrays_all_close(fused, unfused)
 
+  @parameterized.parameters(False, True)
+  def test_gmm_tile_fn_receives_tiling_request(self, use_partial_sum):
+    """A custom `tile_info` callback is called with a `TilingRequest`."""
+    batch_size, in_size, out_size, num_groups = 128, 512, 512, 16
+    key = jax.random.key(0)
+    k0, k1, k2 = jax.random.split(key, 3)
+    lhs = jax.random.normal(k0, (batch_size, in_size), dtype=jnp.bfloat16)
+    rhs = jax.random.normal(
+        k1, (num_groups, in_size, out_size), dtype=jnp.bfloat16
+    )
+    partial_sum = None
+    if use_partial_sum:
+      partial_sum = jax.random.normal(
+          k2, (batch_size, out_size), dtype=jnp.bfloat16
+      )
+    group_sizes = get_group_sizes(batch_size, num_groups)
+    vmem_limit_bytes = 32 * 1024 * 1024
+
+    requests = []
+
+    def tile_fn(req):
+      requests.append(req)
+      return gmm_v2.calculate_tiling_from_request(req)
+
+    actual = gmm_v2.gmm_v2(
+        lhs,
+        rhs,
+        group_sizes,
+        partial_sum=partial_sum,
+        tile_info=tile_fn,
+        vmem_limit_bytes=vmem_limit_bytes,
+    )
+
+    self.assertNotEmpty(requests)
+    req = requests[0]
+    self.assertIsInstance(req, gmm_v2.TilingRequest)
+    self.assertEqual(req.dims.size_k, in_size)
+    self.assertEqual(req.dims.size_n, out_size)
+    self.assertEqual(req.vmem_limit_bytes, vmem_limit_bytes)
+    self.assertIsNone(req.fuse_act)
+    self.assertEqual(req.has_partial_sum, use_partial_sum)
+    expected = gmm_v2.gmm_v2(lhs, rhs, group_sizes, partial_sum=partial_sum)
+    assert_arrays_all_close(actual, expected)
+
   @parameterized.product(
       batch_size=[73, 117],
       out_size=[255, 512],
@@ -738,6 +782,45 @@ class GmmTest(parameterized.TestCase):
         preferred_element_type=jnp.bfloat16,
     )
     self.assertEqual(actual.shape, (num_local_groups, in_size, out_size))
+    assert_arrays_all_close(actual, expected)
+
+  def test_tgmm_tile_fn_receives_tiling_request(self):
+    """A custom `tile_info` callback is called with a `TgmmTilingRequest`."""
+    batch_size, in_size, out_size, num_groups = 256, 1024, 1024, 16
+    key = jax.random.key(0)
+    key1, key2 = jax.random.split(key, 2)
+    lhs = jax.random.normal(key1, (batch_size, in_size), dtype=jnp.bfloat16)
+    grad = jax.random.normal(key2, (batch_size, out_size), dtype=jnp.bfloat16)
+    group_sizes = get_group_sizes(batch_size, num_groups)
+    vmem_limit_bytes = 32 * 1024 * 1024
+
+    requests = []
+
+    def tile_fn(req):
+      requests.append(req)
+      return tgmm_v2.calculate_tgmm_tiling_from_request(req)
+
+    actual = tgmm_v2.tgmm_v2(
+        lhs,
+        grad,
+        group_sizes,
+        num_groups,
+        preferred_element_type=jnp.bfloat16,
+        tile_info=tile_fn,
+        vmem_limit_bytes=vmem_limit_bytes,
+    )
+
+    self.assertNotEmpty(requests)
+    req = requests[0]
+    self.assertIsInstance(req, tgmm_v2.TgmmTilingRequest)
+    self.assertEqual(req.dims.size_k, in_size)
+    self.assertEqual(req.dims.size_n, out_size)
+    self.assertEqual(req.vmem_limit_bytes, vmem_limit_bytes)
+    self.assertEqual(req.out_dtype, jnp.bfloat16)
+    self.assertEqual(req.acc_dtype, jnp.float32)
+    expected = reference_tgmm(
+        lhs.swapaxes(0, 1), grad, group_sizes, num_groups
+    )
     assert_arrays_all_close(actual, expected)
 
   @parameterized.product(
@@ -2225,7 +2308,7 @@ class GmmV2VmemStressTest(parameterized.TestCase):
       in_size,
       out_size,
       transpose_rhs,
-      tile_info=gmm_v2.calculate_tiling,
+      tile_info=gmm_v2.calculate_tiling_from_request,
   ):
     group_sizes = get_group_sizes(batch_size, num_groups)
     lhs_spec = jax.ShapeDtypeStruct((batch_size, in_size), jnp.bfloat16)
